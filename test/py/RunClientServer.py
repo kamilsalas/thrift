@@ -46,7 +46,7 @@ generated_dirs = []
 for gp_dir in options.genpydirs.split(','):
   generated_dirs.append('gen-py-%s' % (gp_dir))
 
-SCRIPTS = ['SerializationTest.py', 'TestEof.py', 'TestSyntax.py', 'TestSocket.py']
+SCRIPTS = ['SerializationTest.py', 'TestEof.py', 'TestSyntax.py', 'TestSocket.py', 'ValidationTest.py']
 FRAMED = ["TNonblockingServer"]
 SKIP_ZLIB = ['TNonblockingServer', 'THttpServer']
 SKIP_SSL = ['TNonblockingServer', 'THttpServer']
@@ -129,7 +129,7 @@ def runServiceTest(genpydir, server_class, proto, port, use_zlib, use_ssl):
   if options.verbose > 0:
     print 'Testing server %s: %s' % (server_class, ' '.join(server_args))
   serverproc = subprocess.Popen(server_args)
-  time.sleep(0.15)
+  time.sleep(1.00)
   try:
     if options.verbose > 0:
       print 'Testing client: %s' % (' '.join(cli_args))

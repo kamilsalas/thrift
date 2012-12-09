@@ -223,6 +223,10 @@ class t_py_generator : public t_generator {
   std::string argument_list(t_struct* tstruct);
   std::string type_to_enum(t_type* ttype);
   std::string type_to_spec_args(t_type* ttype);
+  std::string type_to_python_types(t_type* ttype);
+  void generate_py_field_validator(std::ofstream& out, t_type* ttype, bool required, 
+    const string& variable_name, const string& readable_name);
+  std::string python_boolean(bool b);
 
   static bool is_valid_namespace(const std::string& sub_namespace) {
     return sub_namespace == "twisted";
@@ -655,18 +659,20 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
      Here we generate the structure specification for the fastbinary codec.
      These specifications have the following structure:
      thrift_spec -> tuple of item_spec
-     item_spec -> None | (tag, type_enum, name, spec_args, default)
+     item_spec -> None | (tag, type_enum, name, spec_args, default, is_required)
      tag -> integer
      type_enum -> TType.I32 | TType.STRING | TType.STRUCT | ...
      name -> string_literal
      default -> None  # Handled by __init__
      spec_args -> None  # For simple types
+                | enum_class_name # For enum type, then outer type_enum == TType.I32
                 | (type_enum, spec_args)  # Value type for list/set
                 | (type_enum, spec_args, type_enum, spec_args)
                   # Key and value for map
                 | (class_name, spec_args_ptr) # For struct/exception
      class_name -> identifier  # Basically a pointer to the class
      spec_args_ptr -> expression  # just class_name.spec_args
+     is_required -> boolean value
 
      TODO(dreiss): Consider making this work for structs with negative tags.
   */
@@ -702,6 +708,7 @@ void t_py_generator::generate_py_struct_definition(ofstream& out,
             << "'" << (*m_iter)->get_name() << "'" << ", "
             << type_to_spec_args((*m_iter)->get_type()) << ", "
             << render_field_default_value(*m_iter) << ", "
+            << python_boolean((*m_iter)->get_req() == t_field::T_REQUIRED) << ", "
             << "),"
             << " # " << sorted_keys_pos
             << endl;
@@ -979,18 +986,103 @@ void t_py_generator::generate_py_struct_required_validator(ofstream& out,
     vector<t_field*>::const_iterator f_iter;
 
     for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
-      t_field* field = (*f_iter);
-      if (field->get_req() == t_field::T_REQUIRED) {
-        indent(out) << "if self." << field->get_name() << " is None:" << endl;
-        indent(out) << "  raise TProtocol.TProtocolException(message='Required field " <<
-          field->get_name() << " is unset!')" << endl;
-      }
+      generate_py_field_validator(out, (*f_iter)->get_type(), 
+        (*f_iter)->get_req() == t_field::T_REQUIRED, "self." + (*f_iter)->get_name(),
+        "field " + (*f_iter)->get_name());
     }
   }
 
   indent(out) << "return" << endl << endl;
   indent_down();
 }
+
+/**
+ * Generates code which validate a field.
+ *
+ * @param ttype The type of field
+ * @param required If the field is required
+ * @param variable_name The variable by which we can access the field
+ * @param field_name The name of the field 
+ */
+void t_py_generator::generate_py_field_validator(ofstream& out, t_type* ttype, 
+    bool required, const string& variable_name, const string& field_name) {
+  // 1. if the field is required, check if it is not None
+  if (required) {
+    indent(out) << "if " << variable_name << " is None:" << endl;
+    indent(out) << "  raise TProtocol.TProtocolException(message='Field " << 
+      field_name << " is/contains None. None value is invalid for required" <<
+      " fields or inside containers.')" << endl;
+  }
+
+  indent(out) << "if " << variable_name << " is not None:" << endl;
+  indent_up();
+
+  // 2. check if the assigned object is instance of the appropriate type
+  
+  indent(out) << "if not isinstance(" << 
+    variable_name << ", " << type_to_python_types(ttype) << "):" << endl;
+  indent(out) << "  raise TProtocol.TProtocolException(message='Field " <<
+    field_name << " should be/contain " << type_to_python_types(ttype) <<
+    ", but instead it is/contains ' + str(type(" << variable_name <<
+    ")) + '.')" << endl;
+  
+
+  // 3.1 if the field is a enum, we want to check if it has got a correct value
+  // 3.2 i16 and byte don't have direct representation in python, 
+  //     so we need to check their length manually 
+  string additional_condition;
+  if (ttype->is_base_type() && 
+     ((t_base_type*)ttype)->get_base() == t_base_type::TYPE_BYTE) { 
+    additional_condition = string() + " or not (" + variable_name + 
+      " >= -128 and " + variable_name + " <= 127)";
+  } else if (ttype->is_base_type() && 
+      ((t_base_type*)ttype)->get_base() == t_base_type::TYPE_I16) {
+    additional_condition = string() + " or not (" + variable_name + 
+      " >= -32768 and " + variable_name + " <= 32767)";
+  } 
+  if (ttype->is_enum()) {
+    additional_condition = string() + " or not (" + variable_name + 
+      " in " + ttype->get_name() + "._VALUES_TO_NAMES)";
+  }
+
+  indent(out) << "if False " << additional_condition << ":" << endl;
+  indent(out) << "  raise TProtocol.TProtocolException(message='Field " <<
+    field_name << " should be/contain " << ttype->get_name() <<
+    ", but the value is out of range.')" << endl; 
+
+  // 4. if the field is a struct, we need to validate recursivly
+  if (ttype->is_struct()) {
+    indent(out) << variable_name << ".validate()" << endl;
+  }
+
+  // 5. if the field is a set or a list, we need to validate all elements
+  if (ttype->is_set() || ttype->is_list()) {
+    t_type* t_elem_type = NULL;
+    if (ttype->is_set()) {
+      t_elem_type = ((t_set*)ttype)->get_elem_type();
+    } else if (ttype->is_list()) {
+      t_elem_type = ((t_list*)ttype)->get_elem_type(); 
+    }
+    indent(out) << "for element in " << variable_name << ":" << endl;
+    indent_up();
+    generate_py_field_validator(out, t_elem_type, true, "element", field_name);
+    indent_down();
+  }
+
+  // 6. if the field is a map, we need to validate all keys and values
+  if (ttype->is_map()) {
+    t_type* key_type = ((t_map*)ttype)->get_key_type();
+    t_type* value_type = ((t_map*)ttype)->get_val_type();
+    indent(out) << "for key, value in " << variable_name << ".items():" << endl;
+    indent_up();
+    generate_py_field_validator(out, key_type, true, "key", field_name);
+    generate_py_field_validator(out, value_type, true, "value", field_name);
+    indent_down();
+  }
+
+  indent_down();
+  indent(out) << endl;
+} 
 
 /**
  * Generates a thrift service.
@@ -2432,8 +2524,49 @@ string t_py_generator::type_name(t_type* ttype) {
   return ttype->get_name();
 }
 
+/** 
+ * Converts the type to a Python type
+ */
+string t_py_generator::type_to_python_types(t_type* ttype) {
+  ttype = get_true_type(ttype);
+
+  if (ttype->is_base_type()) {
+    t_base_type::t_base tbase = ((t_base_type*)ttype)->get_base(); 
+    switch (tbase) {
+    case t_base_type::TYPE_VOID:
+      throw "NO T_VOID PYTHON TYPE";
+    case t_base_type::TYPE_STRING:
+      return "str";
+    case t_base_type::TYPE_BOOL:
+      return "bool";
+    case t_base_type::TYPE_BYTE:
+      return "int";
+    case t_base_type::TYPE_I16:
+      return "int";
+    case t_base_type::TYPE_I32:
+      return "int";
+    case t_base_type::TYPE_I64:
+      return "(int, long)";
+    case t_base_type::TYPE_DOUBLE:
+      return "(int, long, float)";
+    }
+  } else if (ttype->is_enum()) {
+    return "int";
+  } else if (ttype->is_struct() || ttype->is_xception()) {
+    return ttype->get_name();
+  } else if (ttype->is_map()) {
+    return "dict";
+  } else if (ttype->is_set()) {
+    return "set";
+  } else if (ttype->is_list()) {
+    return "list";
+  }
+  
+  throw "INVALID TYPE IN type_to_python_types: " + ttype->get_name();
+}
+
 /**
- * Converts the parse type to a Python tyoe
+ * Converts the parse type to a Python type
  */
 string t_py_generator::type_to_enum(t_type* type) {
   type = get_true_type(type);
@@ -2479,8 +2612,10 @@ string t_py_generator::type_to_spec_args(t_type* ttype) {
     ttype = ((t_typedef*)ttype)->get_type();
   }
 
-  if (ttype->is_base_type() || ttype->is_enum()) {
+  if (ttype->is_base_type()) {
     return "None";
+  } else if (ttype->is_enum()) {
+    return type_name(ttype);
   } else if (ttype->is_struct() || ttype->is_xception()) {
     return "(" + type_name(ttype) + ", " + type_name(ttype) + ".thrift_spec)";
   } else if (ttype->is_map()) {
@@ -2505,6 +2640,13 @@ string t_py_generator::type_to_spec_args(t_type* ttype) {
   }
 
   throw "INVALID TYPE IN type_to_spec_args: " + ttype->get_name();
+}
+
+string t_py_generator::python_boolean(bool b) {
+  if (b) {
+    return "True"; 
+  }
+  return "False";
 }
 
 

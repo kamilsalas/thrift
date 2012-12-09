@@ -273,8 +273,8 @@ static int
 parse_struct_item_spec(StructItemSpec* dest, PyObject* spec_tuple) {
 
   // i'd like to use ParseArgs here, but it seems to be a bottleneck.
-  if (PyTuple_Size(spec_tuple) != 5) {
-    PyErr_SetString(PyExc_TypeError, "expecting 5 arguments for spec tuple");
+  if (PyTuple_Size(spec_tuple) != 6) {
+    PyErr_SetString(PyExc_TypeError, "expecting 6 arguments for spec tuple");
     return false;
   }
 

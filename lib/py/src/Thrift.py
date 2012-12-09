@@ -38,6 +38,7 @@ class TType:
   LIST   = 15
   UTF8   = 16
   UTF16  = 17
+  ENUM   = 18
 
   _VALUES_TO_NAMES = ('STOP',
                       'VOID',
@@ -56,7 +57,30 @@ class TType:
                      'SET',
                      'LIST',
                      'UTF8',
-                     'UTF16')
+                     'UTF16',
+                     'ENUM')
+
+  _VALUES_TO_PYTHON_TYPE = (None,     # 0 STOP
+                            None,     # 1 VOID
+                            bool,     # 2 BOOL
+                            int,      # 3 BYTE/I08
+                            float,    # 4 DOUBLE
+                            None,
+                            int,      # 6 I16
+                            None,
+                            int,      # 8 I32
+                            None,
+                            (int, long), # 10 I64
+                            str,      # 11 STRING/UTF7
+                            None,     # 12 STRUCT
+                            dict,     # 13 MAP
+                            set,      # 14 SET
+                            list,     # 15 LIST
+                            str,      # 16 UTF8
+                            str,      # 17 UTF16
+                            int)      # 18 ENUM
+
+
 
 
 class TMessageType:
