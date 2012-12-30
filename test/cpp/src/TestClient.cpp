@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
     printf("testDouble(-5.2098523)");
     double dub = testClient.testDouble(-5.2098523);
     printf(" = %f\n", dub);
-    if ((dub - (-5.2098523)) > 0.001)
+    if (abs(dub - (-5.2098523)) > 0.001)
         failCount++;
 
     /**
