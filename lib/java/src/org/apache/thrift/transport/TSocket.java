@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
+import javax.net.SocketFactory;
 
 /**
  * Socket implementation of the TTransport interface. To be commented soon!
@@ -41,6 +42,11 @@ public class TSocket extends TIOStreamTransport {
    * Wrapped Socket object
    */
   private Socket socket_ = null;
+
+  /**
+   * Wrapped Socket Factory object
+   */
+  private SocketFactory socketFactory_ = null;
 
   /**
    * Remote host
@@ -65,22 +71,26 @@ public class TSocket extends TIOStreamTransport {
    */
   public TSocket(Socket socket) throws TTransportException {
     socket_ = socket;
-    try {
-      socket_.setSoLinger(false, 0);
-      socket_.setTcpNoDelay(true);
-    } catch (SocketException sx) {
-      LOGGER.warn("Could not configure socket.", sx);
-    }
-
+    setSocketConfig();
     if (isOpen()) {
-      try {
-        inputStream_ = new BufferedInputStream(socket_.getInputStream(), 1024);
-        outputStream_ = new BufferedOutputStream(socket_.getOutputStream(), 1024);
-      } catch (IOException iox) {
-        close();
-        throw new TTransportException(TTransportException.NOT_OPEN, iox);
-      }
+      initStreams();
     }
+  }
+
+  /**
+   * Constructor that takes a socket factory to create sockets.
+   *
+   * @param factory SocketFactory which will create sockets
+   * @param host Remote host
+   * @param port Remote port
+   * @param timeout Socket timeout
+   */
+  public TSocket(SocketFactory factory, String host, int port, int timeout) throws TTransportException {
+    socketFactory_ = factory; 
+    host_ = host;
+    port_ = port;
+    timeout_ = timeout;
+    initSocketFromFactory();
   }
 
   /**
@@ -114,6 +124,27 @@ public class TSocket extends TIOStreamTransport {
    */
   private void initSocket() {
     socket_ = new Socket();
+    setSocketConfig();
+  }
+
+  /**
+   * Create the socket object from factory
+   */
+  private void initSocketFromFactory() throws TTransportException {
+    try {
+      socket_ = socketFactory_.createSocket(host_, port_); 
+    } catch (IOException iox) {
+      throw new TTransportException(TTransportException.NOT_OPEN, iox);
+    }
+    setSocketConfig();
+    // connection is already opened, so we want to initialize streams
+    initStreams();
+  }
+  
+  /** 
+   * Configure the socket by setting timeout, tcp_nodelay and so_linger.
+   */
+  private void setSocketConfig() {
     try {
       socket_.setSoLinger(false, 0);
       socket_.setTcpNoDelay(true);
@@ -131,7 +162,11 @@ public class TSocket extends TIOStreamTransport {
   public void setTimeout(int timeout) {
     timeout_ = timeout;
     try {
-      socket_.setSoTimeout(timeout);
+      if (socket_ != null) {
+        socket_.setSoTimeout(timeout);
+      } else {
+        LOGGER.warn("Could not set socket timeout, because an inner socket is null."); 
+      }
     } catch (SocketException sx) {
       LOGGER.warn("Could not set socket timeout.", sx);
     }
@@ -140,9 +175,13 @@ public class TSocket extends TIOStreamTransport {
   /**
    * Returns a reference to the underlying socket.
    */
-  public Socket getSocket() {
+  public Socket getSocket() throws TTransportException {
     if (socket_ == null) {
-      initSocket();
+      if (socketFactory_ != null) {
+        initSocketFromFactory();
+      } else {
+        initSocket();
+      }
     }
     return socket_;
   }
@@ -165,6 +204,10 @@ public class TSocket extends TIOStreamTransport {
       throw new TTransportException(TTransportException.ALREADY_OPEN, "Socket already connected.");
     }
 
+    if (host_ == null) {
+      throw new TTransportException(TTransportException.NOT_OPEN, "This type of TSocket is not connectable."); 
+    }
+
     if (host_.length() == 0) {
       throw new TTransportException(TTransportException.NOT_OPEN, "Cannot open null host.");
     }
@@ -172,12 +215,27 @@ public class TSocket extends TIOStreamTransport {
       throw new TTransportException(TTransportException.NOT_OPEN, "Cannot open without port.");
     }
 
-    if (socket_ == null) {
-      initSocket();
+    if (socketFactory_ != null) {
+      initSocketFromFactory(); 
+    } else {
+      if (socket_ == null) {
+        initSocket();
+      }
+      try {
+        socket_.connect(new InetSocketAddress(host_, port_), timeout_);
+      } catch (IOException iox) {
+        close();
+        throw new TTransportException(TTransportException.NOT_OPEN, iox);
+      }
+      initStreams();
     }
+  }
 
+  /**
+   * Initializes an input and output stream from the underlying socket.
+   */
+  private void initStreams() throws TTransportException {
     try {
-      socket_.connect(new InetSocketAddress(host_, port_), timeout_);
       inputStream_ = new BufferedInputStream(socket_.getInputStream(), 1024);
       outputStream_ = new BufferedOutputStream(socket_.getOutputStream(), 1024);
     } catch (IOException iox) {
