@@ -214,6 +214,8 @@ class t_cpp_generator : public t_oop_generator {
   std::string argument_list(t_struct* tstruct, bool name_params=true, bool start_comma=false);
   std::string type_to_enum(t_type* ttype);
   std::string local_reflection_name(const char*, t_type* ttype, bool external=false);
+  std::string enum_default_value(t_enum* tenum);
+  std::string enum_value(t_enum* tenum, int value);
 
   void generate_enum_constant_list(std::ofstream& f,
                                    const vector<t_enum_value*>& constants,
@@ -569,6 +571,28 @@ void t_cpp_generator::generate_enum(t_enum* tenum) {
 }
 
 /**
+ * Generates a default value of an enum
+ */
+std::string t_cpp_generator::enum_default_value(t_enum* tenum) {
+  return enum_value(tenum, tenum->get_constants().front()->get_value());
+}
+
+/**
+ * Generates a given value of an enum.
+ */
+std::string t_cpp_generator::enum_value(t_enum* tenum, int value) {
+  vector<t_enum_value*> constants = tenum->get_constants();
+  vector<t_enum_value*>::iterator c_iter;
+  for (c_iter = constants.begin(); c_iter != constants.end(); ++c_iter) {
+    if ((*c_iter)->get_value() == value) {
+      return tenum->get_name() + "::" + (*c_iter)->get_name();
+    }
+  }
+  // Fallback value.
+  return "(" + type_name(tenum) + ")0";
+}
+
+/**
  * Generates a class that holds all the constants.
  */
 void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
@@ -663,7 +687,7 @@ void t_cpp_generator::print_const_value(ofstream& out, string name, t_type* type
     indent(out) << name << " = " << v2 << ";" << endl <<
       endl;
   } else if (type->is_enum()) {
-    indent(out) << name << " = (" << type_name(type) << ")" << value->get_integer() << ";" << endl <<
+    indent(out) << name << " = " << enum_value((t_enum*)type, value->get_integer()) << ";" << endl <<
       endl;
   } else if (type->is_struct() || type->is_xception()) {
     const vector<t_field*>& fields = ((t_struct*)type)->get_members();
@@ -754,7 +778,7 @@ string t_cpp_generator::render_const_value(ofstream& out, string name, t_type* t
       throw "compiler error: no const of base type " + t_base_type::t_base_name(tbase);
     }
   } else if (type->is_enum()) {
-    render << "(" << type_name(type) << ")" << value->get_integer();
+    render << enum_value((t_enum*)type, value->get_integer());
   } else {
     string t = tmp("tmp");
     indent(out) << type_name(type) << " " << t << ";" << endl;
@@ -874,18 +898,24 @@ void t_cpp_generator::generate_struct_definition(ofstream& out,
       tstruct->get_name() << "()";
 
     bool init_ctor = false;
+    bool has_non_optional = false;
 
     for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
       t_type* t = get_true_type((*m_iter)->get_type());
+      if ((*m_iter)->get_req() != t_field::T_OPTIONAL) {
+        has_non_optional = true;
+      }
       if (t->is_base_type() || t->is_enum()) {
         string dval;
-        if (t->is_enum()) {
-          dval += "(" + type_name(t) + ")";
-        }
-        dval += t->is_string() ? "" : "0";
         t_const_value* cv = (*m_iter)->get_value();
         if (cv != NULL) {
           dval = render_const_value(out, (*m_iter)->get_name(), t, cv);
+        } else {
+          if (t->is_enum()) {
+            dval = enum_default_value((t_enum*)t);
+          } else {
+            dval = t->is_string() ? "" : "0";
+          }
         }
         if (!init_ctor) {
           init_ctor = true;
@@ -903,7 +933,7 @@ void t_cpp_generator::generate_struct_definition(ofstream& out,
     for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
       t_type* t = get_true_type((*m_iter)->get_type());
 
-      if (!t->is_base_type()) {
+      if (!t->is_base_type() && !t->is_enum()) {
         t_const_value* cv = (*m_iter)->get_value();
         if (cv != NULL) {
           print_const_value(out, (*m_iter)->get_name(), t, cv);
@@ -911,6 +941,75 @@ void t_cpp_generator::generate_struct_definition(ofstream& out,
       }
     }
     scope_down(out);
+    indent(out) << endl;
+
+    // Constructor with parameters.
+    if (has_non_optional) {
+      indent(out) <<
+        tstruct->get_name() << "(";
+
+      bool init_arguments = false;
+      init_ctor = false;
+
+      for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+        if ((*m_iter)->get_req() != t_field::T_OPTIONAL) {
+          t_type* t = get_true_type((*m_iter)->get_type());
+          if (init_arguments) {
+            out << ", ";
+          }
+          init_arguments = true;
+          if (!t->is_base_type() || t->is_string()) { // false for bool, numbers and void
+            out << "const & "; 
+          }
+          out << type_name((*m_iter)->get_type()) << " " << (*m_iter)->get_name() << "_";
+        }
+      }
+      out << ")";
+
+      for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+        t_type* t = get_true_type((*m_iter)->get_type());
+        string dval;
+        if ((*m_iter)->get_req() == t_field::T_OPTIONAL) {
+          if (t->is_base_type() || t->is_enum()) {
+            t_const_value* cv = (*m_iter)->get_value();
+            if (cv != NULL) {
+              dval = render_const_value(out, (*m_iter)->get_name(), t, cv);
+            } else if (t->is_enum()) {
+              dval = enum_default_value((t_enum*)t);
+            } else if (!t->is_string()) {
+              dval = "";
+            }
+          }
+        } else {
+          dval = (*m_iter)->get_name() + "_";
+        }
+        if (!dval.empty()) {
+          if (!init_ctor) {
+            init_ctor = true;
+            out << " : ";
+          } else {
+            out << ", ";
+          }
+          out << (*m_iter)->get_name() << "(" << dval << ")";
+        }
+      }
+      out << " {" << endl;
+      indent_up();
+      // TODO(dreiss): When everything else in Thrift is perfect,
+      // do more of these in the initializer list.
+      // Copy & pasted from the default constructor.
+      for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+        t_type* t = get_true_type((*m_iter)->get_type());
+
+        if (!t->is_base_type() && !t->is_enum()) {
+          t_const_value* cv = (*m_iter)->get_value();
+          if (cv != NULL) {
+            print_const_value(out, (*m_iter)->get_name(), t, cv);
+          }
+        }
+      }
+      scope_down(out);
+    }
   }
 
   if (tstruct->annotations_.find("final") == tstruct->annotations_.end()) {

@@ -93,7 +93,8 @@ struct Xtruct3
   1:  string string_thing,
   4:  i32    changed,
   9:  i32    i32_thing,
-  11: i64    i64_thing
+  11: i64    i64_thing,
+  12: Numberz enum_thing,
 }
 
 

@@ -317,6 +317,20 @@ int main(int argc, char** argv) {
     	failCount++;
 
     /**
+     * STRUCT TEST - the second constructor
+     */
+    printf("testStruct({\"Zero\", 1, -3, -5})");
+    out = Xtruct("Zero", 1, -3, -5);
+    testClient.testStruct(in, out);
+    printf(" = {\"%s\", %d, %d, %"PRId64"}\n",
+           in.string_thing.c_str(),
+           (int)in.byte_thing,
+           in.i32_thing,
+           in.i64_thing);
+    if (in != out)
+    	failCount++;
+
+    /**
      * NESTED STRUCT TEST
      */
     printf("testNest({1, {\"Zero\", 1, -3, -5}), 5}");
@@ -325,6 +339,23 @@ int main(int argc, char** argv) {
     out2.struct_thing = out;
     out2.i32_thing = 5;
     Xtruct2 in2;
+    testClient.testNest(in2, out2);
+    in = in2.struct_thing;
+    printf(" = {%d, {\"%s\", %d, %d, %"PRId64"}, %d}\n",
+           in2.byte_thing,
+           in.string_thing.c_str(),
+           (int)in.byte_thing,
+           in.i32_thing,
+           in.i64_thing,
+           in2.i32_thing);
+    if (in2 != out2)
+    	failCount++;
+
+    /**
+     * NESTED STRUCT TEST - the second constructor
+     */
+    printf("testNest({1, {\"Zero\", 1, -3, -5}), 5}");
+    out2 = Xtruct2(1, out, 5);
     testClient.testNest(in2, out2);
     in = in2.struct_thing;
     printf(" = {%d, {\"%s\", %d, %d, %"PRId64"}, %d}\n",
